@@ -234,7 +234,7 @@ export function AdminPage({ onBackToVisitor }: { onBackToVisitor: () => void }) 
               </h1>
               <p className="text-xs text-[#5A655F]">
                 {serverConnected
-                  ? 'Connected to shared Wi-Fi SQLite + Local IndexedDB'
+                  ? 'Live Sync Active · All Phones + Local IndexedDB'
                   : 'Local IndexedDB Mode (Offline)'}
               </p>
             </div>

@@ -5,7 +5,11 @@ import {
   mergeReviewsLocally,
   saveReviewLocally,
 } from '../database/db';
-import type { NewReviewInput, ReviewRecord } from '../types/review';
+import type { NewReviewInput, ReviewRecord, StarRating } from '../types/review';
+
+const RELAY_TOPIC = 'gs-exb-hype0999-2026-8f3c';
+const RELAY_POST_URL = `https://ntfy.sh/${RELAY_TOPIC}`;
+const RELAY_POLL_URL = `https://ntfy.sh/${RELAY_TOPIC}/json?poll=1&since=12h`;
 
 function generateReviewId(): string {
   const now = new Date();
@@ -37,14 +41,14 @@ function formatLocalTime(date: Date): string {
   ].join(':');
 }
 
-async function postReviewToServer(record: ReviewRecord): Promise<boolean> {
+async function postReviewToLocalServer(record: ReviewRecord): Promise<boolean> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     return false;
   }
   try {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 3000);
-    const res = await fetch('/api/reviews', {
+    const timer = window.setTimeout(() => controller.abort(), 2000);
+    const res = await fetch('./api/reviews', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record),
@@ -54,6 +58,83 @@ async function postReviewToServer(record: ReviewRecord): Promise<boolean> {
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+async function postReviewToRelay(record: ReviewRecord): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return false;
+  }
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(RELAY_POST_URL, {
+      method: 'POST',
+      body: JSON.stringify(record),
+      signal: controller.signal,
+    });
+    window.clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchReviewsFromRelay(): Promise<{
+  reviews: ReviewRecord[];
+  connected: boolean;
+}> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { reviews: [], connected: false };
+  }
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(RELAY_POLL_URL, { signal: controller.signal });
+    window.clearTimeout(timer);
+    if (!res.ok) {
+      return { reviews: [], connected: false };
+    }
+    const text = await res.text();
+    const parsed: ReviewRecord[] = [];
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const envelope = JSON.parse(trimmed) as { event?: string; message?: string };
+        if (envelope.event !== 'message' || typeof envelope.message !== 'string') {
+          continue;
+        }
+        const item = JSON.parse(envelope.message) as Partial<ReviewRecord>;
+        const rating = Number(item?.starRating);
+        if (
+          item &&
+          typeof item.reviewId === 'string' &&
+          item.reviewId.trim().length > 0 &&
+          Number.isInteger(rating) &&
+          rating >= 1 &&
+          rating <= 5
+        ) {
+          parsed.push({
+            reviewId: item.reviewId.trim(),
+            submissionDate: String(item.submissionDate || ''),
+            submissionTime: String(item.submissionTime || ''),
+            createdAtIso: String(item.createdAtIso || new Date().toISOString()),
+            starRating: rating as StarRating,
+            selectedReactions: Array.isArray(item.selectedReactions)
+              ? item.selectedReactions.map(String)
+              : [],
+            suggestions: String(item.suggestions || ''),
+            synced: 1,
+          });
+        }
+      } catch {
+        // Ignore malformed lines
+      }
+    }
+    return { reviews: parsed, connected: true };
+  } catch {
+    return { reviews: [], connected: false };
   }
 }
 
@@ -74,11 +155,15 @@ export async function submitReview(input: NewReviewInput): Promise<{
   };
 
   // 1. Always persist transactionally in IndexedDB first.
-  // If IndexedDB fails, this throws and the UI will NOT show success.
   const saved = await saveReviewLocally(record);
 
-  // 2. Best-effort immediate sync to shared Wi-Fi SQLite server (if running).
-  const synced = await postReviewToServer(saved);
+  // 2. Sync to cross-device GitHub Pages relay AND optional local SQLite server.
+  const [relayOk, localOk] = await Promise.all([
+    postReviewToRelay(saved),
+    postReviewToLocalServer(saved),
+  ]);
+
+  const synced = relayOk || localOk;
   if (synced) {
     await markReviewSynced(saved.reviewId);
     saved.synced = 1;
@@ -105,8 +190,11 @@ export async function syncPendingReviews(): Promise<number> {
   const pending = await getUnsyncedReviews();
   let syncedCount = 0;
   for (const record of pending) {
-    const ok = await postReviewToServer(record);
-    if (ok) {
+    const [relayOk, localOk] = await Promise.all([
+      postReviewToRelay(record),
+      postReviewToLocalServer(record),
+    ]);
+    if (relayOk || localOk) {
       await markReviewSynced(record.reviewId);
       syncedCount += 1;
     }
@@ -118,14 +206,26 @@ export async function fetchAllReviews(): Promise<{
   reviews: ReviewRecord[];
   serverConnected: boolean;
 }> {
-  const localReviews = await getLocalReviews();
+  // Flush any unsynced local reviews in background
+  void syncPendingReviews();
+
+  const [localReviews, relayResult] = await Promise.all([
+    getLocalReviews(),
+    fetchReviewsFromRelay(),
+  ]);
+
+  // Persist newly fetched phone reviews permanently into this desktop's IndexedDB
+  if (relayResult.reviews.length > 0) {
+    await mergeReviewsLocally(relayResult.reviews);
+  }
+
   let serverReviews: ReviewRecord[] = [];
-  let serverConnected = false;
+  let localServerConnected = false;
 
   if (typeof navigator === 'undefined' || navigator.onLine) {
     try {
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 2000);
+      const timer = window.setTimeout(() => controller.abort(), 1500);
       const res = await fetch('./api/reviews', { signal: controller.signal });
       window.clearTimeout(timer);
       if (res.ok) {
@@ -134,19 +234,20 @@ export async function fetchAllReviews(): Promise<{
           const data = (await res.json()) as { reviews?: ReviewRecord[] };
           if (Array.isArray(data.reviews)) {
             serverReviews = data.reviews.map((r) => ({ ...r, synced: 1 }));
-            serverConnected = true;
-            void syncPendingReviews();
+            localServerConnected = true;
           }
         }
       }
     } catch {
-      serverConnected = false;
+      localServerConnected = false;
     }
   }
 
-  // Merge by reviewId without losing any local or server records
   const mergedMap = new Map<string, ReviewRecord>();
   for (const r of localReviews) {
+    mergedMap.set(r.reviewId, r);
+  }
+  for (const r of relayResult.reviews) {
     mergedMap.set(r.reviewId, r);
   }
   for (const r of serverReviews) {
@@ -157,7 +258,10 @@ export async function fetchAllReviews(): Promise<{
     b.createdAtIso.localeCompare(a.createdAtIso)
   );
 
-  return { reviews: merged, serverConnected };
+  return {
+    reviews: merged,
+    serverConnected: relayResult.connected || localServerConnected,
+  };
 }
 
 export async function restoreReviewsBackup(
@@ -173,7 +277,7 @@ export async function restoreReviewsBackup(
   let serverSynced = false;
   if (typeof navigator === 'undefined' || navigator.onLine) {
     try {
-      const res = await fetch('/api/reviews/restore', {
+      const res = await fetch('./api/reviews/restore', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reviews: normalized }),
