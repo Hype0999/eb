@@ -1,0 +1,17 @@
+{
+  "name": "Gau Samvardhan — Smart Cattle Welfare & Monitoring System",
+  "short_name": "Gau Samvardhan",
+  "description": "Exhibition feedback for Gau Samvardhan — Smart Cattle Welfare & Monitoring System.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#F8F8F3",
+  "theme_color": "#F8F8F3",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
