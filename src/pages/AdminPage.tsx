@@ -64,9 +64,31 @@ export function AdminPage({ onBackToVisitor }: { onBackToVisitor: () => void }) 
   }, []);
 
   useEffect(() => {
-    if (unlocked) {
+    if (!unlocked) return;
+    void loadData();
+
+    const onFocus = () => void loadData();
+    window.addEventListener('focus', onFocus);
+
+    const intervalId = window.setInterval(() => {
       void loadData();
+    }, 5000);
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        channel = new BroadcastChannel('gau-samvardhan-reviews');
+        channel.onmessage = () => void loadData();
+      } catch {
+        channel = null;
+      }
     }
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(intervalId);
+      channel?.close();
+    };
   }, [unlocked, loadData]);
 
   const handleUnlock = (e: React.FormEvent) => {

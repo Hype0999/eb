@@ -40,6 +40,10 @@ export function VisitorPage() {
               Technology for better cattle welfare, smarter monitoring and a safer future.
             </p>
 
+            <p className="mt-2.5 text-sm font-medium text-[#174D36] sm:text-base">
+              Presented by Kartikeya Saini &amp; Aaryesh Dandapat
+            </p>
+
             <div className="mt-5 flex flex-col items-stretch gap-2.5 sm:mt-8 sm:flex-row sm:items-center sm:gap-4">
               <button
                 type="button"

@@ -84,6 +84,17 @@ export async function submitReview(input: NewReviewInput): Promise<{
     saved.synced = 1;
   }
 
+  // Notify any open admin tab on the same device immediately
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      const ch = new BroadcastChannel('gau-samvardhan-reviews');
+      ch.postMessage({ type: 'review-added', reviewId: saved.reviewId });
+      ch.close();
+    } catch {
+      // Ignore if BroadcastChannel is unavailable
+    }
+  }
+
   return { record: saved, syncedToServer: synced };
 }
 
