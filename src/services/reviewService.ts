@@ -118,9 +118,6 @@ export async function fetchAllReviews(): Promise<{
   reviews: ReviewRecord[];
   serverConnected: boolean;
 }> {
-  // Flush any pending local reviews first
-  await syncPendingReviews();
-
   const localReviews = await getLocalReviews();
   let serverReviews: ReviewRecord[] = [];
   let serverConnected = false;
@@ -128,14 +125,18 @@ export async function fetchAllReviews(): Promise<{
   if (typeof navigator === 'undefined' || navigator.onLine) {
     try {
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 3000);
-      const res = await fetch('/api/reviews', { signal: controller.signal });
+      const timer = window.setTimeout(() => controller.abort(), 2000);
+      const res = await fetch('./api/reviews', { signal: controller.signal });
       window.clearTimeout(timer);
       if (res.ok) {
-        const data = (await res.json()) as { reviews?: ReviewRecord[] };
-        if (Array.isArray(data.reviews)) {
-          serverReviews = data.reviews.map((r) => ({ ...r, synced: 1 }));
-          serverConnected = true;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = (await res.json()) as { reviews?: ReviewRecord[] };
+          if (Array.isArray(data.reviews)) {
+            serverReviews = data.reviews.map((r) => ({ ...r, synced: 1 }));
+            serverConnected = true;
+            void syncPendingReviews();
+          }
         }
       }
     } catch {
